@@ -19,10 +19,17 @@ type CloakedName struct {
 	isIP       bool
 }
 
+type IPTuple struct {
+	c byte
+	d byte
+}
+
 type PluginCloak struct {
 	sync.RWMutex
 	patternMatcher *PatternMatcher
 	ttl            uint32
+	current IPTuple
+	results map[string]IPTuple
 }
 
 func (plugin *PluginCloak) Name() string {
@@ -41,6 +48,8 @@ func (plugin *PluginCloak) Init(proxy *Proxy) error {
 	}
 	plugin.ttl = proxy.cacheMinTTL
 	plugin.patternMatcher = NewPatternPatcher()
+	plugin.current = IPTuple{0, 0}
+	plugin.results = make(map[string]IPTuple)
 	for lineNo, line := range strings.Split(string(bin), "\n") {
 		line = strings.TrimFunc(line, unicode.IsSpace)
 		if len(line) == 0 || strings.HasPrefix(line, "#") {
@@ -137,6 +146,25 @@ func (plugin *PluginCloak) Eval(pluginsState *PluginsState, msg *dns.Msg) error 
 		}
 		plugin.Unlock()
 	} else {
+		if cloakedName.ipv4 != nil {
+			var ipv4 *net.IP = cloakedName.ipv4
+			var tuple IPTuple
+			var present bool
+
+			tuple, present = plugin.results[question.Name]
+
+			if !present {
+				tuple = plugin.current
+				plugin.results[question.Name] = tuple
+				plugin.current.d += 1
+				if plugin.current.d == 0 {
+					plugin.current.c += 1
+				}
+			}
+
+			(*ipv4)[2] = tuple.c
+			(*ipv4)[3] = tuple.d
+		}
 		plugin.RUnlock()
 	}
 	var ip *net.IP
