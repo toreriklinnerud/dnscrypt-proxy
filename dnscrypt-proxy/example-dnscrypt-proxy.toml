@@ -346,6 +346,13 @@ reject_ttl = 600
 # cloak_ttl = 600
 
 
+###############################
+#        Peer domains         #
+###############################
+# Just-in-time routing of IP addresses matching DNS lookups. DNS wildcards allowed.
+# See the `example-route-peers.toml` file for an example
+# route_peers = 'route_peers.toml'
+
 
 ###########################
 #        DNS cache        #

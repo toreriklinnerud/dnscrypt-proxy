@@ -65,6 +65,7 @@ type Proxy struct {
 	blockedQueryResponse          string
 	userName                      string
 	nxLogFile                     string
+	routePeersFile                string
 	blockNameFormat               string
 	proxySecretKey                [32]byte
 	proxyPublicKey                [32]byte

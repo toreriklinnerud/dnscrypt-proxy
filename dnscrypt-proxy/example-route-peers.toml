@@ -1,0 +1,10 @@
+[[peer]]
+name = "Norway"
+dns = ["84.208.20.110", "84.208.20.111"]
+link = "wg0"
+endpoint = "10.20.20.4"
+domains = [
+  "nrk.no",
+  "vg.no",
+  "tv2.no",
+]

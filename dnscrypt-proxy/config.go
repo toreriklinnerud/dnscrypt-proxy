@@ -69,6 +69,7 @@ type Config struct {
 	BlockIPLegacy            BlockIPConfigLegacy         `toml:"ip_blacklist"`
 	AllowIP                  AllowIPConfig               `toml:"allowed_ips"`
 	ForwardFile              string                      `toml:"forwarding_rules"`
+	RoutePeersFile           string                      `toml:"route_peers"`
 	CloakFile                string                      `toml:"cloaking_rules"`
 	CaptivePortals           CaptivePortalsConfig        `toml:"captive_portals"`
 	StaticsConfig            map[string]StaticConfig     `toml:"static"`
@@ -596,6 +597,8 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags) error {
 	proxy.allowedIPLogFile = config.AllowIP.LogFile
 
 	proxy.forwardFile = config.ForwardFile
+	proxy.routePeersFile = config.RoutePeersFile
+
 	proxy.cloakFile = config.CloakFile
 	proxy.captivePortalMapFile = config.CaptivePortals.MapFile
 
