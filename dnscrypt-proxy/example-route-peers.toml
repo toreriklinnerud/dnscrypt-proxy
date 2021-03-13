@@ -1,9 +1,9 @@
 [[peer]]
-name = "Norway"
-dns = ["84.208.20.110", "84.208.20.111"]
-link = "wg0"
-endpoint = "10.20.20.4"
-domains = [
+Name = "Norway"
+Link = "wg0"
+Endpoint = "10.20.20.4"
+PublicKey = "li1sYJTqH+sTfkk3PBKuW/MiltNuD6FeGHRHf56kFVI="
+Domains = [
   "nrk.no",
   "vg.no",
   "tv2.no",
