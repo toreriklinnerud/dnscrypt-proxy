@@ -97,13 +97,13 @@ func (plugin *PluginRoutes) Eval(pluginsState *PluginsState, msg *dns.Msg) error
 	if question.Qclass != dns.ClassINET || (question.Qtype != dns.TypeA) {
 		return nil
 	}
+
 	var matchingPeer *Peer = nil
+
 	for _, peer := range plugin.Peers {
-		for _, domain := range peer.Domains {
-			if domain.MatchString(question.Name) {
-				matchingPeer = &peer
-				break
-			}
+		if peer.MatchDomain(question.Name) {
+			matchingPeer = &peer
+			break
 		}
 	}
 
@@ -142,6 +142,7 @@ func (plugin *PluginRoutes) Eval(pluginsState *PluginsState, msg *dns.Msg) error
 	}
 
 	for _, answer := range answers {
+
 		header := answer.Header()
 		Rrtype := header.Rrtype
 		if header.Class != dns.ClassINET || (Rrtype != dns.TypeA) {
@@ -186,4 +187,13 @@ func (plugin *PluginRoutes) AddRoute(peer *Peer, destination *net.IPNet) {
 		Peers: []wgtypes.PeerConfig{peerConfig}}
 
 	plugin.Wg.ConfigureDevice(linkAttrs.Name, config)
+}
+
+func (peer *Peer) MatchDomain(question string) bool {
+	for _, domain := range peer.Domains {
+		if domain.MatchString(question) {
+			return true
+		}
+	}
+	return false
 }
