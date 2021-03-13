@@ -1,37 +1,41 @@
 package main
 
 import (
-	"net"
-	"strings"
 	"fmt"
-	"math/rand"
-	"regexp"
 	"github.com/BurntSushi/toml"
-	"github.com/vishvananda/netlink"
 	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
+	"github.com/vishvananda/netlink"
+	"golang.zx2c4.com/wireguard/wgctrl"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+	"net"
+	"regexp"
+	"strings"
 )
 
+type PeerConfig struct {
+	Name      string
+	Link      string
+	PublicKey string
+	Endpoint  net.IP
+	Domains   []string
+}
+
+type PeersConfig struct {
+	Peer []PeerConfig
+}
+
 type Peer struct {
-	Name string
-	Dns []string
-	Link string
-	Endpoint net.IP
-	Domains []string
-}
-
-type Peers struct {
-	Peer []Peer
-}
-
-type PeerRoute struct {
-	peer *Peer
-	dns_servers *[]string
-	domain regexp.Regexp
+	Name      string
+	Link      netlink.Link
+	PublicKey wgtypes.Key
+	Endpoint  net.IP
+	Domains   []regexp.Regexp
 }
 
 type PluginRoutes struct {
-	peer_routes []PeerRoute
+	Peers []Peer
+	Wg    *wgctrl.Client
 }
 
 func (plugin *PluginRoutes) Name() string {
@@ -43,32 +47,37 @@ func (plugin *PluginRoutes) Description() string {
 }
 
 func (plugin *PluginRoutes) Init(proxy *Proxy) error {
-	var peers Peers
-	if _, err := toml.DecodeFile(proxy.routePeersFile, &peers); err != nil {
+	var peersConfig PeersConfig
+	if _, err := toml.DecodeFile(proxy.routePeersFile, &peersConfig); err != nil {
 		dlog.Fatal(err)
 	}
+	plugin.Wg, _ = wgctrl.New()
 
-	plugin.peer_routes = []PeerRoute{}
-	for _, peer := range peers.Peer {
+	plugin.Peers = []Peer{}
+	for _, peerConfig := range peersConfig.Peer {
 
-		var dns_servers []string
-		for _, dns_server := range peer.Dns {
-			if net.ParseIP(dns_server) != nil {
-				dns_server = fmt.Sprintf("%s:%d", dns_server, 53)
-			}
-			dns_servers = append(dns_servers, dns_server)
-		}
+		key, _ := wgtypes.ParseKey(peerConfig.PublicKey)
+		link, _ := netlink.LinkByName(peerConfig.Link)
 
-		for _, domain := range peer.Domains {
+		var domains = []regexp.Regexp{}
+		for _, domain := range peerConfig.Domains {
 			pattern := ".*" + strings.ReplaceAll(regexp.QuoteMeta(domain), "\\*", ".+")
 			compiled, _ := regexp.Compile(pattern)
-			plugin.peer_routes = append(plugin.peer_routes, PeerRoute{peer: &peer, dns_servers: &dns_servers, domain: *compiled})
+			domains = append(domains, *compiled)
 		}
+		plugin.Peers = append(plugin.Peers, Peer{Name: peerConfig.Name, PublicKey: key, Domains: domains, Link: link, Endpoint: peerConfig.Endpoint})
 	}
 
-	dlog.Notice("Routes loaded:")
-	for _, peer_route := range plugin.peer_routes {
-		dlog.Noticef("%s %s", peer_route.peer.Name, peer_route.domain.String())
+	dlog.Notice("Peers loaded:")
+	for _, peer := range plugin.Peers {
+		dlog.Noticef("%s:", peer.Name)
+		dlog.Noticef("Public Key %s", peer.PublicKey.String())
+		dlog.Noticef("Link %s", peer.Link.Attrs().Name)
+		dlog.Noticef("Endpoint %s", peer.Endpoint)
+		dlog.Noticef("Domains:")
+		for _, domain := range peer.Domains {
+			dlog.Noticef(" %s", strings.Replace(domain.String(), "\\", "", -1))
+		}
 	}
 
 	return nil
@@ -84,40 +93,40 @@ func (plugin *PluginRoutes) Reload() error {
 
 func (plugin *PluginRoutes) Eval(pluginsState *PluginsState, msg *dns.Msg) error {
 	question := msg.Question[0]
-	dlog.Noticef("Domain %s", question.Name)
+
 	if question.Qclass != dns.ClassINET || (question.Qtype != dns.TypeA) {
 		return nil
 	}
-	var peer *Peer = nil
-	var dns_servers []string = nil
-	for _, route := range plugin.peer_routes {
-			if route.domain.MatchString(question.Name)  {
-					peer = route.peer
-					dns_servers = *route.dns_servers
-					break
+	var matchingPeer *Peer = nil
+	for _, peer := range plugin.Peers {
+		for _, domain := range peer.Domains {
+			if domain.MatchString(question.Name) {
+				matchingPeer = &peer
+				break
 			}
+		}
 	}
 
-	if peer == nil {
+	if matchingPeer == nil {
+		dlog.Noticef("No match for %s", question.Name)
 		return nil
 	}
 
-	link, _ := netlink.LinkByName(peer.Link)
-	server := dns_servers[rand.Intn(len(dns_servers))]
+	upstream := fmt.Sprintf("%s:%s", matchingPeer.Endpoint, "53")
 
 	client := dns.Client{Net: pluginsState.serverProto, Timeout: pluginsState.timeout}
-	respMsg, _, err := client.Exchange(msg, server)
+	respMsg, _, err := client.Exchange(msg, upstream)
 	if err != nil {
-			dlog.Warnf("-- err: %s", err)
+		dlog.Warnf("err: %s", err)
 
 		return err
 	}
 
 	if respMsg.Truncated {
 		client.Net = "tcp"
-		respMsg, _, err = client.Exchange(msg, server)
+		respMsg, _, err = client.Exchange(msg, upstream)
 		if err != nil {
-			dlog.Warnf("-- err: %s", err)
+			dlog.Warnf("err: %s", err)
 			return err
 		}
 	}
@@ -141,19 +150,7 @@ func (plugin *PluginRoutes) Eval(pluginsState *PluginsState, msg *dns.Msg) error
 		if Rrtype == dns.TypeA {
 			destination_ip := net.ParseIP(answer.(*dns.A).A.String())
 			destination := &net.IPNet{destination_ip, net.CIDRMask(32, 32)}
-
-			route := netlink.Route{
-				Scope:     netlink.SCOPE_UNIVERSE,
-				LinkIndex: link.Attrs().Index,
-				Dst: destination,
-				Gw: peer.Endpoint,
-			}
-			error := netlink.RouteReplace(&route)
-			if(error == nil) {
-				dlog.Noticef("-- routing %s via %s", destination, peer.Name)
-			} else {
-				dlog.Errorf("-- error adding route: %s", error)
-			}
+			plugin.AddRoute(matchingPeer, destination)
 		}
 	}
 
@@ -163,4 +160,30 @@ func (plugin *PluginRoutes) Eval(pluginsState *PluginsState, msg *dns.Msg) error
 	pluginsState.returnCode = PluginsReturnCodeForward
 
 	return nil
+}
+
+func (plugin *PluginRoutes) AddRoute(peer *Peer, destination *net.IPNet) {
+	linkAttrs := peer.Link.Attrs()
+	route := netlink.Route{
+		Scope:     netlink.SCOPE_UNIVERSE,
+		LinkIndex: linkAttrs.Index,
+		Dst:       destination,
+		Gw:        peer.Endpoint,
+	}
+	error := netlink.RouteReplace(&route)
+	if error == nil {
+		dlog.Noticef("%s routing via %s", destination.String(), peer.Name)
+	} else {
+		dlog.Errorf("error adding route: %s", error)
+	}
+
+	peerConfig := wgtypes.PeerConfig{
+		PublicKey:         peer.PublicKey,
+		ReplaceAllowedIPs: false,
+		AllowedIPs:        []net.IPNet{*destination}}
+
+	config := wgtypes.Config{
+		Peers: []wgtypes.PeerConfig{peerConfig}}
+
+	plugin.Wg.ConfigureDevice(linkAttrs.Name, config)
 }
